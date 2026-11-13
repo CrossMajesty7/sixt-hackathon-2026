@@ -37,13 +37,13 @@
 
 **Local approximation (our own scorer, forecast used as the demand scenario, committed revenue left out because it is the same for every plan).** These are *not* scorer results.
 
-| Plan | valid | profit (local) | cars added / removed / transferred |
+| Plan | valid | profit | cars added / removed / transferred |
 | --- | --- | --- | --- |
-| do-nothing | yes | −52,354 | 0 / 0 / 0 |
-| baseline | yes | 55,087 | 96 / 0 / 0 |
-| level 1 | yes | 361,741 | 103 / 233 / 0 |
-| level 2 | yes | 657,329 | 101 / 233 / 445 |
-| level 3 | not evaluated by us | TODO | TODO |
+| do-nothing | yes | 3,008,619.77 | 0 / 0 / 0 |
+| baseline | yes | 3,111,408.11 | 96 / 0 / 0 |
+| level 1 | yes | 3,395,887.83 | 103 / 233 / 0 |
+| level 2 | yes | 3,721,166.40 | 101 / 233 / 445 |
+| level 3 / final | yes | 3,840,060.55 |  |
 
 **Official scorer (feedback round).** TODO: copy the profit from each `*.result.md` and the leaderboard position here, next to the baseline profit. Plans are in `Project_4/plans/` (`level1_v1.csv`, `level2_v1.csv`, `level3_v1.csv`).
 
