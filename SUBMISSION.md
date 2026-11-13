@@ -73,7 +73,8 @@ python level3.py      # plans/level3_v1.csv  (up to about 7 min; uses plans/leve
 
 ## Demo
 
-TODO: `submission/slides.pdf` (max 5 slides) or `submission/demo.mp4` (1 min, under 50 MB). The file must exist in the repo before the deadline.
+Project_4.pptx
+
 
 ## Next steps
 
