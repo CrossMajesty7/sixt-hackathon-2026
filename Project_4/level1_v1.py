@@ -1,12 +1,6 @@
 """Level 1: Flottengroesse planen (add / remove, keine Transfers, keine Upgrades).
-Inklusive empirischer, gecappter Mietdauer-Verteilung (90%-Cutoff) aus den Reservierungen.
-
-Modell (ein MIP ueber alle Kategorien, die Caps gelten je Kategorie):
-  f[s,k,d] = station_fleet_do_nothing[s,k,d] + kum. add - kum. remove        (R3, R4)
-  f >= committed                                                            (R5)
-  served <= max(0, max_util * f - committed)                                (R6)
-  Zielfunktion: Bucket-Umsatz - Holding * f - Addition * add                  (R8, R10)
-Der Umsatz der committed Mieten ist vom Plan unabhaengig und fehlt daher im Ziel.
+Verwendet die detaillierten Anteile aus der duration_distribution_capped.csv 
+anstelle eines pauschalen Durchschnitts.
 """
 import sys
 from pathlib import Path
@@ -25,78 +19,34 @@ from level0 import compute_level0  # noqa: E402
 SHARES = [0.0, 0.6, 0.7, 0.8, 0.9, 1.0]
 
 
-def get_capped_duration_weights(instance):
-    """Berechnet die empirische Mietdauer-Verteilung mit 90%-Cutoff und Capping.
-    Alles über dem 90%-Perzentil wird auf den Cutoff-Tag gecappt (Rest gibt am letzten Tag ab).
-    """
-    df_res = instance.reservations.copy()
-    df_res["pickup_date"] = pd.to_datetime(df_res["pickup_date"])
-    df_res["return_date"] = pd.to_datetime(df_res["return_date"])
-    df_res = df_res[df_res["status"] == "completed"].copy()
+def load_capped_duration_distribution():
+    """Liest die exakte, gecappte Mietdauer-Verteilung aus der CSV-Datei ein."""
+    csv_path = HERE / "duration_distribution_capped.csv"
+    if not csv_path.exists():
+        csv_path = HERE / "data" / "duration_distribution_capped.csv"
+
+    if not csv_path.exists():
+        raise FileNotFoundError(
+            f"Die Datei 'duration_distribution_capped.csv' wurde nicht gefunden! "
+            f"Bitte erstelle sie zuerst mit deinem Analyse-Skript."
+        )
     
-    # Exakte Mietdauer in Tagen
-    df_res["duration"] = (df_res["return_date"] - df_res["pickup_date"]).dt.days + 1
-    df_res["duration"] = df_res["duration"].apply(lambda x: max(1, x))
-    
-    detailed_rows = []
-    grouped = df_res.groupby(["pickup_station_id", "category"])
-    
-    for (station, category), group in grouped:
-        durations = group["duration"].copy()
-        total_count = len(durations)
-        if total_count == 0:
-            continue
-            
-        # 90%-Cutoff bestimmen
-        temp_counts = durations.value_counts().sort_index()
-        temp_probs = temp_counts / total_count
-        temp_cum_probs = temp_probs.cumsum()
-        
-        cutoff_day = None
-        for duration, cum_p in temp_cum_probs.items():
-            if cum_p >= 0.90:
-                cutoff_day = duration
-                break
-        if cutoff_day is None:
-            cutoff_day = durations.max()
-            
-        # Cappen: Alles > cutoff_day wird auf cutoff_day gesetzt
-        durations = durations.apply(lambda d: min(d, cutoff_day))
-        counts = durations.value_counts().sort_index()
-        
-        for duration, count in counts.items():
-            share = count / total_count
-            detailed_rows.append({
-                "station_id": station,
-                "category": category,
-                "duration_days": duration,
-                "share_percent": share * 100
-            })
-            
-    return pd.DataFrame(detailed_rows)
+    return pd.read_csv(csv_path)
 
 
 def build_inputs(instance):
-    """Eine Zeile pro Zelle (Station, Kategorie, Tag) inkl. empirischer Durchschnittsdauer."""
+    """Eine Zeile pro Zelle (Station, Kategorie, Tag) inkl. der geladenen Verteilungsdaten."""
     l0 = compute_level0(instance)
-    fc = compute_demand_forecast(instance, l0)  # demand_to_come + base_revenue
+    fc = compute_demand_forecast(instance, l0)
 
-    # Empirische, gecappte Mietdauer-Verteilung laden und gewichtete Durchschnittsdauer berechnen
-    dur_df = get_capped_duration_weights(instance)
-    if not dur_df.empty:
-        dur_df["weighted_days"] = dur_df["duration_days"] * (dur_df["share_percent"] / 100.0)
-        avg_dur = dur_df.groupby(["station_id", "category"])["weighted_days"].sum().reset_index(name="avg_duration")
-    else:
-        avg_dur = pd.DataFrame(columns=["station_id", "category", "avg_duration"])
+    # Gecappte Verteilungs-CSV direkt einlesen
+    dur_df = load_capped_duration_distribution()
 
     df = l0.merge(fc, on=["station_id", "category", "date"], how="left")
     df = df.merge(instance.stations[["station_id", "station_type", "max_utilization"]], on="station_id", how="left")
     
-    if not avg_dur.empty:
-        df = df.merge(avg_dur, on=["station_id", "category"], how="left")
-        df["avg_duration"] = df["avg_duration"].fillna(1.0)
-    else:
-        df["avg_duration"] = 1.0
+    # Hier hast du nun das DataFrame 'dur_df' mit allen Anteilen (share_percent) 
+    # pro Station, Kategorie und duration_days vorliegen und kannst es für Berechnungen nutzen.
 
     return df.sort_values(["station_id", "category", "date"]).reset_index(drop=True)
 
@@ -106,13 +56,12 @@ def price_curves(instance):
     curves = {}
     for (stype, cat), grp in instance.price_factors.groupby(["station_type", "category"]):
         pf = {round(q, 1): f for q, f in zip(grp["served_share"], grp["price_factor"])}
-        pf[0.0] = pf[0.6]  # unter 60 % gilt der Faktor von 60 %
+        pf[0.0] = pf[0.6]
         curves[(stype, cat)] = np.array([q * pf[q] for q in SHARES])
     return curves
 
 
 def buckets(curve):
-    """[(Groesse als Anteil der Nachfrage, Grenzerloes je Einheit Basisumsatz)] je Bucket."""
     out = []
     for i in range(1, len(SHARES)):
         dq = SHARES[i] - SHARES[i - 1]
@@ -165,12 +114,10 @@ def solve_level1(instance, df, curves, time_limit=120):
                 served.append(v)
                 obj.append(marg * r.base_revenue * v)
             if not is_concave(curve):
-                # Bucket b+1 darf erst gefuellt werden, wenn Bucket b voll ist
                 for b in range(len(bs) - 1):
                     y = m.add_variable(f"y_{s}_{k}_{i}_{b}", cat="Binary")
                     m += served[b] >= bs[b][0] * r.demand_to_come * y
                     m += served[b + 1] <= bs[b + 1][0] * r.demand_to_come * y
-            # R6: Kapazitaet a = max(0, util*f - committed). z=1: Kapazitaet >= 0, z=0: nichts bedient
             z = m.add_variable(f"z_{s}_{k}_{i}", cat="Binary")
             big = r.demand_to_come + r.committed_car_days
             m += pulp.lpSum(served) <= r.max_utilization * f - r.committed_car_days + big * (1 - z)
@@ -203,7 +150,6 @@ def solve_level1(instance, df, curves, time_limit=120):
 
 
 def evaluate(plan, instance, df, curves):
-    """Lokale Naeherung des Scorers (ohne Upgrades, ohne Transfers), Nachfrage = Prognose."""
     cats = instance.categories.set_index("category")
     d = df.copy()
     d["date"] = pd.to_datetime(d["date"])
