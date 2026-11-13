@@ -71,6 +71,8 @@ python level3.py      # plans/level3_v1.csv  (up to about 7 min; uses plans/leve
 
 `level1.py` to `level3.py` compute the inputs themselves (they import `level0.py` and `forecast.py`), so only the order of the levels matters for the warm start and the comparison table. The plan files are written with `fleetkit.write_plan`; copy them to the team folder to get the official result.
 
+level3_v1.csv is also the final csv plan
+
 ## Demo
 
 Project_4.pptx
